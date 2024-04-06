@@ -2,7 +2,7 @@
 #![feature(vec_into_raw_parts)]
 
 use core::slice;
-use std::{env, fs::File, io::{BufReader, BufWriter, Read, Write}, os::windows::process::CommandExt, process::Command};
+use std::{env, ffi::CStr, fs::File, io::{BufReader, BufWriter, Read, Write}, os::windows::process::CommandExt, process::Command};
 use hudhook::{hooks::dx9::ImguiDx9Hooks, *};
 use mmap_rs::MemoryAreas;
 use rand::Rng;
@@ -16,8 +16,12 @@ pub struct RenderLoop {
     is_w1_transitioning: u16,
     music: ListBoxData,
     music_entry: Vec<MusicEntry>,
+    string: ListBoxData,
+    string_entry: Vec<StringEntry>,
     w1_position: ([f32; 2], imgui::Condition),
     last_w1_position: [f32; 2],
+    string_search: StringSearch,
+    string_edit: String,
 }
 
 #[derive(Default)]
@@ -38,6 +42,23 @@ pub struct MusicEntry {
     new_music: Option<(usize, usize, usize)>, // *mut u8, size, capacity
 }
 
+#[derive(Default)]
+pub struct StringEntry {
+    offset: usize,
+    entry: usize, // *mut u32
+    entry_ptr: usize, // *mut u8
+    string: String,
+    new_string: Option<(usize, usize, usize)>, // *mut u8, size, capacity
+}
+
+#[derive(Default)]
+pub struct StringSearch {
+    search: String,
+    last: String,
+    times: u16,
+    size: u16,
+}
+
 impl Default for RenderLoop {
     fn default() -> Self {
         Self {
@@ -46,11 +67,15 @@ impl Default for RenderLoop {
             is_w1_transitioning: 0,
             music: ListBoxData::default(),
             music_entry: Vec::new(),
+            string: ListBoxData::default(),
+            string_entry: Vec::new(),
             w1_position: (
                 [15., 15.],
                 imgui::Condition::Never
             ),
             last_w1_position: [15., 15.],
+            string_search: StringSearch::default(),
+            string_edit: String::new(),
         }
     }
 }
@@ -99,15 +124,18 @@ impl RenderLoop {
             let ptr = STRING_FIRST_ENTRY_POINTER + (i as usize * 4);
             pointers.push(((*(ptr as *mut u32)) as usize + offset, ptr));
         }
-        /*for (ptr, sptr) in pointers {
-            //println!("{ptr}");
+
+        for (ptr, sptr) in pointers {
+            let string = CStr::from_ptr((ptr + 4) as *mut i8).to_string_lossy().to_string();
+            self.string.items.push(string.clone());
             self.string_entry.push(StringEntry {
                 offset,
                 entry: ptr,
                 entry_ptr: sptr,
-                string: CString::from_raw((ptr + 4) as *mut i8)
+                string,
+                new_string: None,
             });
-        }*/
+        }
         // External pointer data
         let mut current_audiogroup = 0;
         for ma in MemoryAreas::open(None).unwrap().flatten() {
@@ -143,7 +171,7 @@ impl RenderLoop {
         }
         for ma in MemoryAreas::open(None).unwrap().flatten() {
             if ma.end() - ma.start() > (1024 * 1024) && ma.start() < 0x10000000 && ma.end() - ma.start() < (1024 * 1024 * 4) {
-                // We have no way to know how the heap will end up allocating the pointers
+                // We have no known way on to how the heap will end up allocating the pointers
                 println!("New Memory Area at 0x{:x}", ma.start());
                 let mut offset = ma.start();
                 while offset < ma.end() {
@@ -178,7 +206,7 @@ impl ImguiRenderLoop for RenderLoop {
         if self.is_w1_transitioning > 0 {
             self.is_w1_transitioning -= 1;
         }
-        if ui.is_key_pressed(imgui::Key::Tab) {
+        if ui.is_key_pressed(imgui::Key::F11) {
             self.is_hidding = !self.is_hidding;
             if !self.is_hidding {
                 self.is_w1_transitioning = 30;
@@ -187,7 +215,7 @@ impl ImguiRenderLoop for RenderLoop {
         ui.window("DF Mod Tool")
             .position([15., 15.], imgui::Condition::FirstUseEver)
             .position(self.w1_position.0, self.w1_position.1)
-            .size([420., 420.], imgui::Condition::FirstUseEver)
+            .size([540., 420.], imgui::Condition::FirstUseEver)
             .build(|| {
                 const T: f32 = 0.4;
                 if self.is_hidding {
@@ -207,7 +235,7 @@ impl ImguiRenderLoop for RenderLoop {
                 }
                 ui.text("DF Mod Tool by ZorroMundo");
                 ui.text("Current Version: v1.0.0a1");
-                ui.text("Hide the Window using the TAB key");
+                ui.text("Hide the Window using the F11 key (or Fn + F11 on Laptop)");
                 ui.separator();
                 ui.text_colored([0.2, 1., 0.2, 1.], "General Functions");
                 let mut game_id = unsafe { (*(0xa4e5e0 as *mut i32)).to_string() };
@@ -220,24 +248,6 @@ impl ImguiRenderLoop for RenderLoop {
                         }
                     }
                 }
-                // This seems to have no effect on the game.
-                /*let mut owner_id = unsafe { (*(0x1794646 as *mut i32)).to_string() };
-                ui.input_text("Owner ID", &mut owner_id).build();
-                unsafe {
-                    if let Ok(n) = owner_id.parse::<i32>() {
-                        if *(0x1794646 as *mut i32) != n {
-                            println!("========== Changed Owner ID to {n} ==========");
-                            *(0x1794646 as *mut i32) = n;
-                            *(0x179497a as *mut i32) = n;
-                            *(0x186c582 as *mut i32) = n;
-                        }
-                    }
-                }*/
-                // The owner name should go here.
-                // But, GM is modifying the memory
-                // that is allocated here in Rust
-                // We'll need to investigate more
-                // on how to peform it correctly.
                 ui.separator();
                 ui.text_colored([1., 0.5, 0., 1.], "Music Functions");
                 if ui.button("Save") {
@@ -393,6 +403,196 @@ impl ImguiRenderLoop for RenderLoop {
                     }
                 }
                 ui.list_box("Music Data", &mut self.music.item, &self.music.items.iter().collect::<Vec<&String>>(), 10);
+                ui.separator();
+                ui.text_colored([1., 0., 0., 1.], "String Functions");
+                if ui.button("Export") {
+                    let file = FileDialog::new()
+                        .add_filter("Text Files", &["txt"])
+                        .set_file_name("strings")
+                        .save_file();
+                    if let Some(file) = file {
+                        let mut fstr = String::new();
+                        for string in self.string.items.iter() {
+                            if !fstr.is_empty() {
+                                fstr += "\r\n";
+                            }
+                            fstr += &(string.clone().replace('\n', "\\n").replace('\r', "\\r"));
+                        }
+                        let mut f = BufWriter::new(File::create(file).unwrap());
+                        f.write_all(fstr.as_bytes()).unwrap();
+                        f.flush().unwrap();
+                        drop(f);
+                        println!("========== Exported Strings ==========");
+                    }
+                }
+                ui.same_line();
+                if ui.button("Import") {
+                    let file = FileDialog::new()
+                        .add_filter("Text Files", &["txt"])
+                        .set_file_name("strings")
+                        .pick_file();
+                    if let Some(file) = file {
+                        let mut fstr = String::new();
+                        let mut f = BufReader::new(File::open(file).unwrap());
+                        f.read_to_string(&mut fstr).unwrap();
+                        drop(f);
+
+                        for (index, line) in fstr.split("\r\n").enumerate() {
+                            self.string.items[index] = line.replace("\\r", "\r").replace("\\n", "\n");
+                            let entry = &mut self.string_entry[index];
+                            let r = string_to_gmpointer(line.replace("\\r", "\r").replace("\\n", "\n"));
+                            unsafe {
+                                *(entry.entry_ptr as *mut u32) = (r.0.addr() - entry.offset) as u32;
+                            }
+                            if let Some(string) = entry.new_string {
+                                unsafe {
+                                    drop(Vec::from_raw_parts(string.0 as *mut u8, string.1, string.2));
+                                }
+                            }
+                            entry.new_string = Some((r.0.addr(), r.1, r.2));
+                        }
+                        println!("========== Imported New Strings ==========");
+                    }
+                }
+                ui.same_line();
+                if ui.button("Restore All") {
+                    for index in 0..self.string_entry.len() {
+                        let entry = &mut self.string_entry[index];
+                        unsafe {
+                            *(entry.entry_ptr as *mut u32) = (entry.entry - entry.offset) as u32;
+                        }
+                        if let Some(string) = entry.new_string {
+                            unsafe {
+                                drop(Vec::from_raw_parts(string.0 as *mut u8, string.1, string.2));
+                            }
+                        }
+                        if index == self.string.item as usize {
+                            self.string_edit.clone_from(&entry.string);
+                        }
+                    }
+                    println!("========== Restored All Strings ==========");
+                }
+                if ui.button("Copy to Clipboard") {
+                    println!("========== Selected String ==========");
+                    println!("{}", &self.string.items[self.string.item as usize]);
+                    println!("========== End of String ==========");
+                    ui.set_clipboard_text(&self.string.items[self.string.item as usize]);
+                }
+                ui.same_line();
+                if ui.button("Paste from Clipboard") {
+                    self.string_edit += &ui.clipboard_text().unwrap_or_default();
+                    let entry = &mut self.string_entry[self.string.item as usize];
+                    unsafe {
+                        let old = entry.new_string;
+                        let r = string_to_gmpointer(self.string_edit.clone());
+                        entry.new_string = Some((r.0.addr(), r.1, r.2));
+                        *(entry.entry_ptr as *mut u32) = (r.0.addr() - entry.offset) as u32;
+                        if let Some(string) = old {
+                            drop(Vec::from_raw_parts(string.0 as *mut u8, string.1, string.2));
+                        }
+                    }
+                }
+                if ui.button("Restore this String") {
+                    let entry = &mut self.string_entry[self.string.item as usize];
+                    unsafe {
+                        *(entry.entry_ptr as *mut u32) = (entry.entry - entry.offset) as u32;
+                    }
+                    if let Some(string) = entry.new_string {
+                        unsafe {
+                            drop(Vec::from_raw_parts(string.0 as *mut u8, string.1, string.2));
+                        }
+                    }
+                    self.string_edit.clone_from(&entry.string);
+                }
+                if ui.button("Search") {
+                    if self.string_search.search == self.string_search.last {
+                        self.string_search.times += 1;
+                        if self.string_search.size != 0 && self.string_search.times >= self.string_search.size {
+                            self.string_search.times = 0;
+                        }
+                    } else {
+                        self.string_search.times = 0;
+                        self.string_search.size = 0;
+                    }
+                    self.string_search.last.clone_from(&self.string_search.search);
+
+                    let mut to_skip = self.string_search.times;
+                    let mut first = None;
+                    let mut found = false;
+                    let mut size = 0;
+                    println!("========== Searching Strings ==========");
+                    for (index, string) in self.string.items.iter().enumerate() {
+                        if string.to_lowercase().contains(&self.string_search.search.to_lowercase()) {
+                            size += 1;
+                            if to_skip > 0 {
+                                println!("Found {index}: {string}");
+                                to_skip -= 1;
+                                if first.is_none() {
+                                    first = Some(index);
+                                }
+                            } else if !found {
+                                println!("Found {index} [SELECTED]: {string}");
+                                self.string.item = index as i32;
+                                found = true;
+                            } else {
+                                println!("Found {index}: {string}");
+                            }
+                        }
+                    }
+                    self.string_search.size = size;
+                    if let Some(first) = first { // This should only be triggered on edge-cases.
+                        if !found {
+                            println!("Found {first} [SELECTED]: {}", &self.string.items[first]);
+                            self.string.item = first as i32;
+                            self.string_search.times = 0;
+                        }
+                    }
+                    println!("========== Finished Searching ==========");
+                    let entry = &mut self.string_entry[self.string.item as usize];
+                    self.string_edit.clone_from(&entry.string);
+                    if entry.new_string.is_none() {
+                        let r = string_to_gmpointer(entry.string.clone());
+                        entry.new_string = Some((r.0.addr(), r.1, r.2));
+                        unsafe {
+                            *(entry.entry_ptr as *mut u32) = (r.0.addr() - entry.offset) as u32;
+                        }
+                    }
+                }
+                ui.same_line();
+                ui.input_text("Search Strings", &mut self.string_search.search).build();
+                if ui.input_text_multiline("Edit String", &mut self.string_edit, [420.0, 150.0]).build() {
+                    let entry = &mut self.string_entry[self.string.item as usize];
+                    unsafe {
+                        let old = entry.new_string;
+                        let r = string_to_gmpointer(self.string_edit.clone());
+                        entry.new_string = Some((r.0.addr(), r.1, r.2));
+                        *(entry.entry_ptr as *mut u32) = (r.0.addr() - entry.offset) as u32;
+                        if let Some(string) = old {
+                            drop(Vec::from_raw_parts(string.0 as *mut u8, string.1, string.2));
+                        }
+                    }
+                }
+                if ui.list_box("String Data", &mut self.string.item, &self.string.items.iter().collect::<Vec<&String>>(), 10) {
+                    let entry = &mut self.string_entry[self.string.item as usize];
+                    self.string_edit.clone_from(&entry.string);
+                    if entry.new_string.is_none() {
+                        let r = string_to_gmpointer(entry.string.clone());
+                        entry.new_string = Some((r.0.addr(), r.1, r.2));
+                        unsafe {
+                            *(entry.entry_ptr as *mut u32) = (r.0.addr() - entry.offset) as u32;
+                        }
+                    }
+                }
             });
     }
+}
+
+/// Result is: (Pointer, Size, Capacity)
+pub fn string_to_gmpointer(string: impl Into<String>) -> (*mut u8, usize, usize) {
+    let string = string.into();
+    let mut data = Vec::new();
+    data.extend((string.len() as u32).to_le_bytes());
+    data.extend(string.as_bytes());
+    data.push(0);
+    data.into_raw_parts()
 }
