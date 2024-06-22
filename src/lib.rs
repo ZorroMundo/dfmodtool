@@ -18,7 +18,7 @@ pub struct RenderLoop {
     music_entry: Vec<MusicEntry>,
     string: ListBoxData,
     string_entry: Vec<StringEntry>,
-    w1_position: ([f32; 2], imgui::Condition),
+    w1_position: (f32, imgui::Condition),
     last_w1_position: [f32; 2],
     string_search: StringSearch,
     string_edit: String,
@@ -70,7 +70,7 @@ impl Default for RenderLoop {
             string: ListBoxData::default(),
             string_entry: Vec::new(),
             w1_position: (
-                [15., 15.],
+                15.,
                 imgui::Condition::Never
             ),
             last_w1_position: [15., 15.],
@@ -82,13 +82,13 @@ impl Default for RenderLoop {
 
 impl RenderLoop {
     unsafe fn refresh_music_data(&mut self) {
-        // DF 2.7.8b stuff
-        // 0x01b1fbba: Texture ptr
-        // 0x026d1562: Music ptr
-        // 0x01a395e6: String ptr
+        // DF 2.7.9c stuff
+        // 0x01c4d43d: Texture ptr
+        // 0x0290ac95: Music ptr
+        // 0x01b62c39: String ptr
         println!("========== Started localizing pointers ==========");
-        const MUSIC_SIZE_POINTER: usize = 0x026d1562 + 8;
-        const MUSIC_FIRST_ENTRY_POINTER: usize = 0x026d1562 + 12;
+        const MUSIC_SIZE_POINTER: usize = 0x0290ac95 + 8;
+        const MUSIC_FIRST_ENTRY_POINTER: usize = MUSIC_SIZE_POINTER + 4;
         let size = *(MUSIC_SIZE_POINTER as *mut u32);
         let mut offset = 0;
         let mut pointers = Vec::new();
@@ -110,7 +110,7 @@ impl RenderLoop {
                 ..Default::default()
             });
         }
-        const STRING_FIRST_ENTRY_POINTER: usize = 0x01a395e6 + 12;
+        const STRING_FIRST_ENTRY_POINTER: usize = 0x01b62c39 + 12;
         let mut size = 0;
         while *((STRING_FIRST_ENTRY_POINTER + (size as usize * 4)) as *mut u32) > 0x80 {
             size += 1;
@@ -214,18 +214,18 @@ impl ImguiRenderLoop for RenderLoop {
         }
         ui.window("DF Mod Tool")
             .position([15., 15.], imgui::Condition::FirstUseEver)
-            .position(self.w1_position.0, self.w1_position.1)
+            .position([self.w1_position.0, 15.], self.w1_position.1)
             .size([540., 420.], imgui::Condition::FirstUseEver)
             .build(|| {
                 const T: f32 = 0.4;
                 if self.is_hidding {
-                    self.w1_position.0[0] = self.w1_position.0[0] * (1. - T) + (-(ui.window_size()[0] + 4.) * T);
+                    self.w1_position.0 = self.w1_position.0 * (1. - T) + (-(ui.window_size()[0] + 4.) * T);
                     //self.w1_position.0[1] = self.w1_position.0[1] * (1. - T) + (-ui.window_size()[1] * T);
                     self.w1_position.1 = imgui::Condition::Always;
                 } else if self.is_w1_transitioning > 0 {
                     //self.w1_position.0 = self.last_w1_position;
-                    self.w1_position.0[0] = self.w1_position.0[0] * (1. - T) + (self.last_w1_position[0] * T);
-                    self.w1_position.0[1] = self.w1_position.0[1] * (1. - T) + (self.last_w1_position[1] * T);
+                    self.w1_position.0 = self.w1_position.0 * (1. - T) + (self.last_w1_position[0] * T);
+                    //self.w1_position.0 = self.w1_position.0[1] * (1. - T) + (self.last_w1_position[1] * T);
                 } else if self.w1_position.1 == imgui::Condition::Always {
                     self.w1_position.1 = imgui::Condition::Never;
                 } else {
@@ -234,7 +234,7 @@ impl ImguiRenderLoop for RenderLoop {
                     self.last_w1_position[1] = self.last_w1_position[1].max(15.);
                 }
                 ui.text("DF Mod Tool by ZorroMundo");
-                ui.text("Current Version: v1.0.0a1");
+                ui.text("Made for DFC v2.7.9c");
                 ui.text("Hide the Window using the F11 key (or Fn + F11 on Laptop)");
                 ui.separator();
                 ui.text_colored([0.2, 1., 0.2, 1.], "General Functions");
